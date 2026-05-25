@@ -141,6 +141,20 @@ func (c *Client) dispatch(evt interface{}) {
 	}
 }
 
+// PairIfNeeded performs the QR pairing flow when no session exists; for
+// already-paired sessions it just establishes a quick connection. Used by
+// the setup wizard and by list-groups when they need to talk to the server
+// once without entering the full daemon Run loop.
+func (c *Client) PairIfNeeded(ctx context.Context) error {
+	return c.initialConnect(ctx)
+}
+
+// IsPaired reports whether the session DB has a usable device. Lets
+// callers decide whether to skip the QR step.
+func (c *Client) IsPaired() bool {
+	return c.cli.Store.ID != nil
+}
+
 // Run blocks until ctx is canceled or a fatal disconnect happens. It
 // performs the initial connection (including QR display for new devices)
 // and reconnects with exponential backoff after transient drops.

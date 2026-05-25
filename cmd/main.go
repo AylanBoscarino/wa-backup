@@ -17,6 +17,7 @@ import (
 	"github.com/AylanBoscarino/wa-backup/internal/handler"
 	"github.com/AylanBoscarino/wa-backup/internal/listgroups"
 	"github.com/AylanBoscarino/wa-backup/internal/pipeline"
+	"github.com/AylanBoscarino/wa-backup/internal/setup"
 	"github.com/AylanBoscarino/wa-backup/internal/storage"
 	"go.mau.fi/whatsmeow/types/events"
 	"go.uber.org/zap"
@@ -26,14 +27,15 @@ import (
 const shutdownTimeout = 30 * time.Second
 
 type cliFlags struct {
-	listGroups bool
-	limit      int
-	all        bool
-	jsonOut    bool
-	search     string
-	sortBy     string
-	reverse    bool
-	noHeader   bool
+	listGroups   bool
+	setupWizard  bool
+	limit        int
+	all          bool
+	jsonOut      bool
+	search       string
+	sortBy       string
+	reverse      bool
+	noHeader     bool
 }
 
 func main() {
@@ -51,6 +53,7 @@ func main() {
 
 func parseFlags() cliFlags {
 	var f cliFlags
+	flag.BoolVar(&f.setupWizard, "setup", false, "run the interactive setup wizard and exit")
 	flag.BoolVar(&f.listGroups, "list-groups", false, "list joined WhatsApp groups and exit")
 	flag.IntVar(&f.limit, "limit", 10, "max groups to print (ignored when --all is set)")
 	flag.BoolVar(&f.all, "all", false, "do not limit the number of groups")
@@ -70,6 +73,10 @@ func parseFlags() cliFlags {
 }
 
 func run(flags cliFlags) error {
+	if flags.setupWizard {
+		return runSetup()
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
@@ -228,6 +235,21 @@ func tightenTree(root string) (int, error) {
 		return nil
 	})
 	return changed, walkErr
+}
+
+func runSetup() error {
+	// The wizard is interactive (TUI + QR rendering). Refuse early in
+	// pipes/cron so the user gets a clear message instead of a busted form.
+	if !setup.IsTTY(os.Stdin) || !setup.IsTTY(os.Stdout) {
+		return errors.New("--setup requires an interactive terminal; configure via env vars or .env directly when scripting")
+	}
+	// Use a silent logger so whatsmeow's internal debug chatter doesn't
+	// clobber the TUI output. The wizard prints its own status messages.
+	log := zap.NewNop().Sugar()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go waitForSignal(cancel, log)
+	return setup.Run(ctx, log)
 }
 
 func runListGroups(cfg *config.Config, log *zap.SugaredLogger, flags cliFlags) error {

@@ -46,14 +46,18 @@ which is pure Go.
 ```bash
 git clone https://github.com/AylanBoscarino/wa-backup.git
 cd wa-backup
-cp .env.example .env
-# edit .env if you want non-default paths / filters
-go run ./cmd
+go run ./cmd --setup     # interactive wizard
+go run ./cmd             # start the daemon
 ```
 
-On first run the binary prints a QR code on stderr. Open WhatsApp on your
-phone → **Settings → Linked devices → Link a device**, and scan it. The
-session is saved to `wa-session.db`; subsequent runs reconnect silently.
+`--setup` walks you through choosing paths, pairing via QR, and picking
+which groups to monitor with a checkbox-style picker. It writes a `.env`
+in the project root which the daemon reads on startup. Re-run any time to
+adjust — previous values come back as defaults and the old `.env` is
+saved to `.env.bak.<timestamp>` before being overwritten.
+
+If you'd rather skip the wizard, copy `.env.example` to `.env` and edit
+by hand. The daemon also accepts plain environment variables.
 
 ## Configuration
 
