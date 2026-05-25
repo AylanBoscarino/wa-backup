@@ -14,6 +14,7 @@ import (
 
 	"github.com/AylanBoscarino/wa-backup/config"
 	"github.com/AylanBoscarino/wa-backup/internal/client"
+	"github.com/AylanBoscarino/wa-backup/internal/diff"
 	"github.com/AylanBoscarino/wa-backup/internal/handler"
 	"github.com/AylanBoscarino/wa-backup/internal/index"
 	"github.com/AylanBoscarino/wa-backup/internal/listgroups"
@@ -31,15 +32,18 @@ const (
 )
 
 type cliFlags struct {
-	listGroups   bool
-	setupWizard  bool
-	limit        int
-	all          bool
-	jsonOut      bool
-	search       string
-	sortBy       string
-	reverse      bool
-	noHeader     bool
+	listGroups  bool
+	setupWizard bool
+	limit       int
+	all         bool
+	jsonOut     bool
+	search      string
+	sortBy      string
+	reverse     bool
+	noHeader    bool
+
+	diffSince string // path to cursor file; empty means daemon mode
+	diffJID   string // optional single-group filter for --diff-since
 }
 
 func main() {
@@ -66,6 +70,8 @@ func parseFlags() cliFlags {
 	flag.StringVar(&f.sortBy, "sort", "recent", "sort field: recent|name|members|created")
 	flag.BoolVar(&f.reverse, "reverse", false, "reverse the sort order")
 	flag.BoolVar(&f.noHeader, "no-header", false, "omit the table header (auto when stdout is not a TTY)")
+	flag.StringVar(&f.diffSince, "diff-since", "", "path to an agent cursor file; emit JSONL of messages newer than the cursor and exit")
+	flag.StringVar(&f.diffJID, "diff-jid", "", "restrict --diff-since to a single group JID")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s [flags]\n\n", os.Args[0])
 		fmt.Fprintln(os.Stderr, "Runs the daemon by default. Use --list-groups to print joined groups instead.")
@@ -95,6 +101,14 @@ func run(flags cliFlags) error {
 
 	if flags.listGroups {
 		return runListGroups(cfg, sugar, flags)
+	}
+
+	if flags.diffSince != "" {
+		return diff.Run(diff.Options{
+			BackupRoot: cfg.BackupPath,
+			CursorPath: flags.diffSince,
+			JIDFilter:  flags.diffJID,
+		}, os.Stdout)
 	}
 
 	sugar.Infow("starting wa-backup",

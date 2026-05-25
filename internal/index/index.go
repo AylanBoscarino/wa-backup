@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 
@@ -38,7 +39,12 @@ type Entry struct {
 	LastMessageTS  time.Time `json:"last_message_ts"`
 	LastMessageID  string    `json:"last_message_id"`
 	MessageCount   int       `json:"message_count"`
-	LatestMonth    string    `json:"latest_month"`
+	// Months is the sorted list of YYYY-MM directories that hold this
+	// group's JSONL. Downstream summarizers walk this list to cover
+	// gaps when they've been offline for more than one calendar month
+	// — LatestMonth alone is insufficient for that case.
+	Months      []string `json:"months"`
+	LatestMonth string   `json:"latest_month"`
 }
 
 // Snapshot is the serialized form of the index file.
@@ -68,7 +74,120 @@ func NewManager(root string, log *zap.SugaredLogger) *Manager {
 		state: make(map[string]Entry),
 	}
 	m.loadExisting()
+	m.backfillMonths()
 	return m
+}
+
+// backfillMonths reconciles in-memory entries with what's on disk so
+// that the months[] field is correct even for groups whose history
+// predates this feature. Walks each JID directory once and inserts any
+// YYYY-MM folder that isn't already listed. Cheap one-shot at startup.
+func (m *Manager) backfillMonths() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Also discover groups present on disk but not yet in the in-memory
+	// state — happens after a fresh install on top of an existing backup
+	// or when the index file was deleted.
+	rootEntries, err := os.ReadDir(m.root)
+	if err != nil {
+		return
+	}
+	for _, re := range rootEntries {
+		if !re.IsDir() {
+			continue
+		}
+		jid := re.Name()
+		// Only consider JID-shaped directories.
+		if !looksLikeJID(jid) {
+			continue
+		}
+		months := listMonths(filepath.Join(m.root, jid))
+		if len(months) == 0 {
+			continue
+		}
+		e := m.state[jid]
+		merged := mergeStrings(e.Months, months)
+		if !sameSlice(merged, e.Months) {
+			e.Months = merged
+			if e.LatestMonth == "" {
+				e.LatestMonth = merged[len(merged)-1]
+			}
+			m.state[jid] = e
+			m.dirty = true
+		}
+	}
+}
+
+func listMonths(dir string) []string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() && looksLikeMonth(e.Name()) {
+			out = append(out, e.Name())
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func mergeStrings(a, b []string) []string {
+	seen := make(map[string]struct{}, len(a)+len(b))
+	merged := make([]string, 0, len(a)+len(b))
+	for _, s := range a {
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		merged = append(merged, s)
+	}
+	for _, s := range b {
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		merged = append(merged, s)
+	}
+	sort.Strings(merged)
+	return merged
+}
+
+func sameSlice(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func looksLikeJID(s string) bool {
+	return len(s) > 0 && (hasSuffix(s, "@g.us") || hasSuffix(s, "@s.whatsapp.net"))
+}
+
+func hasSuffix(s, suffix string) bool {
+	return len(s) >= len(suffix) && s[len(s)-len(suffix):] == suffix
+}
+
+func looksLikeMonth(s string) bool {
+	if len(s) != 7 || s[4] != '-' {
+		return false
+	}
+	for i, r := range s {
+		if i == 4 {
+			continue
+		}
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func (m *Manager) loadExisting() {
@@ -119,9 +238,22 @@ func (m *Manager) Record(jid, label, slug, monthKey, messageID string, ts time.T
 		e.LastMessageID = messageID
 		e.LatestMonth = monthKey
 	}
+	if monthKey != "" && !containsString(e.Months, monthKey) {
+		e.Months = append(e.Months, monthKey)
+		sort.Strings(e.Months)
+	}
 	e.MessageCount++
 	m.state[jid] = e
 	m.dirty = true
+}
+
+func containsString(haystack []string, needle string) bool {
+	for _, s := range haystack {
+		if s == needle {
+			return true
+		}
+	}
+	return false
 }
 
 // Flush writes the index to disk if anything changed since the last

@@ -50,16 +50,82 @@ latest ingestion progress per group:
       "last_message_ts": "2026-05-25T11:27:36Z",
       "last_message_id": "3EB05A9FEBC9878F64FEA4",
       "message_count": 93,
+      "months": ["2026-03", "2026-04", "2026-05"],
       "latest_month": "2026-05"
     }
   }
 }
 ```
 
-Downstream summarizers / agents can read this single file and decide
-which groups have new activity since their last run without parsing
-every `messages.jsonl`. Writes are atomic (`tmp` + `rename`), so the
-file is never observed in a partial state.
+Writes are atomic (`tmp` + `rename`), so the file is never observed in
+a partial state.
+
+### Summarizer / downstream-agent contract
+
+Downstream agents (a summarizer, a notifier, a report generator…) can
+do incremental work by comparing the per-group `last_message_ts` /
+`last_message_id` against a cursor they own. The recommended cursor
+format is intentionally minimal:
+
+```json
+// summaries/cursor.json (agent-owned, daemon never writes to it)
+{
+  "groups": {
+    "120363428945290436@g.us": {
+      "last_summarized_ts": "2026-05-20T10:30:00Z",
+      "last_summarized_id": "3EB0ABC123"
+    }
+  }
+}
+```
+
+**Important — compare by `(ts, id)`, not by `ts` alone.** WhatsApp
+timestamps are second-resolution and active groups easily fire 2–3
+messages in the same second. Use a lexicographic tuple compare so
+no message is skipped or duplicated when timestamps tie:
+
+```python
+def is_new(msg, cursor):
+    if msg["timestamp"] >  cursor["last_summarized_ts"]: return True
+    if msg["timestamp"] == cursor["last_summarized_ts"]:
+        return msg["id"] > cursor["last_summarized_id"]
+    return False
+```
+
+When the agent succeeds at summarizing through message X, it must set
+its cursor to `(X.timestamp, X.id)` — never just `X.timestamp`.
+
+#### `--diff-since`: skip the walking yourself
+
+Instead of reading `index.json`, walking `months[]`, and filtering each
+`messages.jsonl`, run:
+
+```bash
+wa-backup --diff-since summaries/cursor.json > new.jsonl
+wa-backup --diff-since summaries/cursor.json --diff-jid 120363428945290436@g.us
+```
+
+The daemon outputs each new message line verbatim (JSONL) to stdout in
+chronological order, walking all `months[]` per group and applying the
+`(ts, id)` tuple compare for you. It does **not** update the cursor —
+that's the agent's job after it has successfully summarized.
+
+A missing cursor file is treated as "summarize from scratch" (every
+message in the backup is considered new), so first-time runs work
+without any setup.
+
+Agent loop in 8 lines of Python:
+
+```python
+import subprocess, json, pathlib
+new = subprocess.check_output(["wa-backup", "--diff-since", "cursor.json"], text=True)
+cur = json.load(open("cursor.json")) if pathlib.Path("cursor.json").exists() else {"groups": {}}
+for line in new.splitlines():
+    m = json.loads(line)
+    summarize(m)
+    cur["groups"][m["group_jid"]] = {"last_summarized_ts": m["timestamp"], "last_summarized_id": m["id"]}
+json.dump(cur, open("cursor.json", "w"), indent=2)
+```
 
 Supported message types: text, image, video, audio/voice note, document,
 sticker, poll, reaction, location. Anything else is stored with
