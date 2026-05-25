@@ -186,22 +186,21 @@ func ensureDirs(s state) error {
 // and returns the list of joined groups. Returns parallel slices keyed by
 // index so the multiselect can use string keys (JIDs are comparable).
 func stepPairAndFetchGroups(ctx context.Context, s state, log *zap.SugaredLogger) ([]string, []string, error) {
-	fmt.Println()
-	fmt.Println("Step 2 of 4 — Pair with WhatsApp")
-	fmt.Println(strings.Repeat("─", 32))
-
 	waClient, err := client.New(ctx, s.SessionDBPath, log)
 	if err != nil {
 		return nil, nil, fmt.Errorf("init client: %w", err)
 	}
 
 	if waClient.IsPaired() {
-		fmt.Println("✓ Session already paired — skipping QR step.")
-	} else {
-		fmt.Println("On your phone open: WhatsApp → Settings → Linked devices → Link a device")
-		fmt.Println("Then scan the QR code that will appear below.")
 		fmt.Println()
+		fmt.Println("Step 2 of 4 — Pair with WhatsApp")
+		fmt.Println(strings.Repeat("─", 32))
+		fmt.Println("✓ Session already paired — skipping QR step.")
 	}
+	// When NOT already paired we let client.initialConnect own the
+	// terminal — it clears the screen and re-renders a single QR each
+	// time WhatsApp rotates the code (~20s). Printing our own "Step 2"
+	// header here would just get wiped on the first refresh.
 
 	pairCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()

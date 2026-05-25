@@ -204,13 +204,13 @@ func (c *Client) initialConnect(ctx context.Context) error {
 	for evt := range qrChan {
 		switch evt.Event {
 		case "code":
-			fmt.Fprintln(os.Stderr, "Scan this QR code in WhatsApp → Settings → Linked devices:")
-			qrterminal.Generate(evt.Code, qr.L, os.Stderr)
+			renderQR(os.Stderr, evt.Code, evt.Timeout)
 		case "success":
+			fmt.Fprintln(os.Stderr, "\n✓ Paired successfully. Session saved.")
 			c.log.Infow("QR scan successful, session saved")
 			return nil
 		case "timeout":
-			return errors.New("QR scan timed out before user scanned")
+			return errors.New("QR scan timed out before user scanned (5 minutes elapsed)")
 		case "err-client-outdated":
 			return errors.New("client outdated; update whatsmeow")
 		case "err-scanned-without-multidevice":
@@ -223,6 +223,27 @@ func (c *Client) initialConnect(ctx context.Context) error {
 		}
 	}
 	return errors.New("QR channel closed unexpectedly")
+}
+
+// renderQR clears the screen and prints a single, current QR. WhatsApp
+// rotates the code roughly every 20 seconds for security; if we just
+// appended each new code to scrollback the user might scan an expired
+// one and see "verify your connection" on their phone. HalfBlock format
+// gives denser, higher-contrast output that scans more reliably than
+// the full-block default.
+func renderQR(w *os.File, code string, expiresIn time.Duration) {
+	// \x1b[2J = clear screen, \x1b[H = move cursor to top-left.
+	fmt.Fprint(w, "\x1b[2J\x1b[H")
+	fmt.Fprintln(w, "Pair this device with WhatsApp")
+	fmt.Fprintln(w, "──────────────────────────────")
+	fmt.Fprintln(w, "On your phone:  WhatsApp → Settings → Linked devices → Link a device")
+	fmt.Fprintln(w)
+	if expiresIn > 0 {
+		fmt.Fprintf(w, "  ↻  This code expires in ~%s. A fresh one will appear automatically.\n", expiresIn.Round(time.Second))
+		fmt.Fprintln(w, "     Scan the QR below — older codes (if you scroll up) are stale.")
+	}
+	fmt.Fprintln(w)
+	qrterminal.GenerateHalfBlock(code, qr.L, w)
 }
 
 func (c *Client) reconnectWithBackoff(ctx context.Context) error {
