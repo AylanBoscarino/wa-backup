@@ -11,7 +11,7 @@ type LocalStorage struct {
 	root string
 
 	mu      sync.Mutex
-	files   map[string]*os.File // groupSlug/yearMonth → open JSONL file
+	files   map[string]*os.File // groupKey/yearMonth → open JSONL file
 	mediaMu sync.RWMutex
 	media   map[string]string // hash → relative path (first-write wins)
 }
@@ -63,14 +63,14 @@ func (l *LocalStorage) rehydrateMediaIndex() error {
 	})
 }
 
-func (l *LocalStorage) AppendMessage(groupSlug, yearMonth string, line []byte) error {
-	key := groupSlug + "/" + yearMonth
+func (l *LocalStorage) AppendMessage(groupKey, yearMonth string, line []byte) error {
+	key := groupKey + "/" + yearMonth
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	f, ok := l.files[key]
 	if !ok {
-		dir := filepath.Join(l.root, groupSlug, yearMonth)
+		dir := filepath.Join(l.root, groupKey, yearMonth)
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return fmt.Errorf("create %s: %w", dir, err)
 		}
@@ -101,7 +101,7 @@ func (l *LocalStorage) Exists(hash, ext string) (bool, string, error) {
 	return false, "", nil
 }
 
-func (l *LocalStorage) WriteMedia(groupSlug, yearMonth, hash, ext string, data []byte) (string, error) {
+func (l *LocalStorage) WriteMedia(groupKey, yearMonth, hash, ext string, data []byte) (string, error) {
 	l.mediaMu.Lock()
 	if p, ok := l.media[hash]; ok {
 		l.mediaMu.Unlock()
@@ -109,12 +109,12 @@ func (l *LocalStorage) WriteMedia(groupSlug, yearMonth, hash, ext string, data [
 	}
 	// Reserve the slot under lock so concurrent workers don't race on the
 	// same hash; release the lock for the actual disk write.
-	dir := filepath.Join(l.root, groupSlug, yearMonth, "media")
+	dir := filepath.Join(l.root, groupKey, yearMonth, "media")
 	name := hash
 	if ext != "" {
 		name = hash + "." + ext
 	}
-	rel := filepath.ToSlash(filepath.Join(groupSlug, yearMonth, "media", name))
+	rel := filepath.ToSlash(filepath.Join(groupKey, yearMonth, "media", name))
 	l.media[hash] = rel
 	l.mediaMu.Unlock()
 

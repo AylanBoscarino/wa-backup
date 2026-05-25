@@ -15,6 +15,7 @@ import (
 	"github.com/AylanBoscarino/wa-backup/config"
 	"github.com/AylanBoscarino/wa-backup/internal/client"
 	"github.com/AylanBoscarino/wa-backup/internal/handler"
+	"github.com/AylanBoscarino/wa-backup/internal/index"
 	"github.com/AylanBoscarino/wa-backup/internal/listgroups"
 	"github.com/AylanBoscarino/wa-backup/internal/pipeline"
 	"github.com/AylanBoscarino/wa-backup/internal/setup"
@@ -24,7 +25,10 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
-const shutdownTimeout = 30 * time.Second
+const (
+	shutdownTimeout    = 30 * time.Second
+	indexFlushInterval = 30 * time.Second
+)
 
 type cliFlags struct {
 	listGroups   bool
@@ -107,6 +111,15 @@ func run(flags cliFlags) error {
 	defer cancel()
 	go waitForSignal(cancel, sugar)
 
+	// Migrate legacy slug-based group dirs to JID-based names BEFORE we
+	// open the storage, so the in-memory media index is rehydrated from
+	// the canonical paths. Idempotent: subsequent runs are no-ops.
+	if n, err := storage.MigrateLegacyDirs(cfg.BackupPath); err != nil {
+		sugar.Warnw("storage migration completed with warnings", "error", err, "migrated", n)
+	} else if n > 0 {
+		sugar.Infow("migrated legacy group directories to JID-based layout", "count", n)
+	}
+
 	store, err := storage.NewLocalStorage(cfg.BackupPath)
 	if err != nil {
 		return fmt.Errorf("init storage: %w", err)
@@ -126,7 +139,15 @@ func run(flags cliFlags) error {
 		return fmt.Errorf("init whatsapp client: %w", err)
 	}
 
-	writer := pipeline.NewWriter(store)
+	idx := index.NewManager(cfg.BackupPath, sugar.With("component", "index"))
+	var idxWG sync.WaitGroup
+	idxWG.Add(1)
+	go func() {
+		defer idxWG.Done()
+		idx.RunPeriodic(ctx, indexFlushInterval)
+	}()
+
+	writer := pipeline.NewWriter(store, idx)
 	downloader := pipeline.NewDownloader(waClient.Underlying(), store, writer, sugar.With("component", "downloader"), cfg.MediaWorkers)
 	filter := pipeline.NewGroupFilter(cfg.GroupAllowlist, cfg.GroupDenylist)
 	processor := pipeline.NewProcessor(waClient.Underlying(), writer, downloader, filter, sugar.With("component", "processor"))
@@ -174,14 +195,21 @@ func run(flags cliFlags) error {
 		sugar.Warnw("media worker drain timed out", "timeout", shutdownTimeout)
 	}
 
-	// 3. Close storage (flush JSONL handles).
+	// 3. Final index flush before we tear anything else down so the
+	// snapshot reflects every message we appended.
+	if err := idx.Flush(); err != nil {
+		sugar.Errorw("final index flush failed", "error", err)
+	}
+
+	// 4. Close storage (flush JSONL handles).
 	if err := store.Close(); err != nil {
 		sugar.Errorw("storage close failed", "error", err)
 	}
 
-	// 4. Stop the history watcher (it watches ctx).
+	// 5. Stop the history watcher + periodic index flusher (both watch ctx).
 	cancel()
 	histWG.Wait()
+	idxWG.Wait()
 
 	// 5. Summary.
 	downloaded, failed, deduped := downloader.Stats()

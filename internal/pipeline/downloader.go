@@ -17,7 +17,7 @@ import (
 // MediaJob carries everything the worker pool needs to download media,
 // compute the dedup hash, persist the bytes and append the final JSONL line.
 type MediaJob struct {
-	GroupSlug string
+	GroupKey string
 	YearMonth string
 	Hash      string
 	Ext       string
@@ -91,7 +91,7 @@ func (d *Downloader) worker(id int) {
 
 func (d *Downloader) run(job *MediaJob) {
 	ctx := context.Background()
-	logCtx := d.log.With("msg_id", job.Envelope.ID, "group", job.GroupSlug, "hash", job.Hash)
+	logCtx := d.log.With("msg_id", job.Envelope.ID, "group", job.GroupKey, "hash", job.Hash)
 
 	// Dedup: if we've seen this hash already, just reference it.
 	if exists, relPath, err := d.store.Exists(job.Hash, job.Ext); err == nil && exists {
@@ -103,7 +103,7 @@ func (d *Downloader) run(job *MediaJob) {
 			Path: relPath,
 			Name: job.OriginalFileName,
 		}
-		if err := d.writer.Append(job.GroupSlug, job.Envelope); err != nil {
+		if err := d.writer.Append(job.GroupKey, job.Envelope); err != nil {
 			logCtx.Errorw("append dedup'd message failed", "error", err)
 		}
 		return
@@ -120,7 +120,7 @@ func (d *Downloader) run(job *MediaJob) {
 			"timestamp", job.Envelope.Timestamp,
 		)
 		// Still persist the message envelope so the text + metadata isn't lost.
-		if err := d.writer.Append(job.GroupSlug, job.Envelope); err != nil {
+		if err := d.writer.Append(job.GroupKey, job.Envelope); err != nil {
 			logCtx.Errorw("append message without media failed", "error", err)
 		}
 		return
@@ -130,7 +130,7 @@ func (d *Downloader) run(job *MediaJob) {
 	if ext == "" {
 		ext = extFromMime(job.Mime)
 	}
-	relPath, err := d.store.WriteMedia(job.GroupSlug, job.YearMonth, job.Hash, ext, data)
+	relPath, err := d.store.WriteMedia(job.GroupKey, job.YearMonth, job.Hash, ext, data)
 	if err != nil {
 		atomic.AddInt64(&d.failed, 1)
 		logCtx.Errorw("write media failed", "error", err)
@@ -146,7 +146,7 @@ func (d *Downloader) run(job *MediaJob) {
 		Path: relPath,
 		Name: job.OriginalFileName,
 	}
-	if err := d.writer.Append(job.GroupSlug, job.Envelope); err != nil {
+	if err := d.writer.Append(job.GroupKey, job.Envelope); err != nil {
 		logCtx.Errorw("append message failed", "error", err)
 	}
 }

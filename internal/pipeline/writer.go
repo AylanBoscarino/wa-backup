@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/AylanBoscarino/wa-backup/internal/index"
 	"github.com/AylanBoscarino/wa-backup/internal/storage"
 )
 
@@ -56,20 +57,33 @@ type LocationData struct {
 	Name string  `json:"name,omitempty"`
 }
 
-// Writer serializes Message structs and hands the bytes to storage.
+// Writer serializes Message structs, hands the bytes to storage, and
+// records the ingestion in the per-group index so downstream agents can
+// pick up incrementally.
 type Writer struct {
 	store storage.Storage
+	idx   *index.Manager // nil-safe; tests can leave it unset
 }
 
-func NewWriter(s storage.Storage) *Writer { return &Writer{store: s} }
+// NewWriter constructs a Writer. Pass a nil index manager when running
+// without incremental tracking (tests, one-off tools).
+func NewWriter(s storage.Storage, idx *index.Manager) *Writer {
+	return &Writer{store: s, idx: idx}
+}
 
-func (w *Writer) Append(groupSlug string, msg *Message) error {
+func (w *Writer) Append(groupKey string, msg *Message) error {
 	yearMonth := msg.Timestamp.UTC().Format("2006-01")
 	line, err := json.Marshal(msg)
 	if err != nil {
 		return fmt.Errorf("marshal message: %w", err)
 	}
-	return w.store.AppendMessage(groupSlug, yearMonth, line)
+	if err := w.store.AppendMessage(groupKey, yearMonth, line); err != nil {
+		return err
+	}
+	if w.idx != nil {
+		w.idx.Record(msg.GroupJID, msg.GroupName, SanitizeGroupName(msg.GroupName), yearMonth, msg.ID, msg.Timestamp)
+	}
+	return nil
 }
 
 var unsafeChars = regexp.MustCompile(`[^a-z0-9-]+`)

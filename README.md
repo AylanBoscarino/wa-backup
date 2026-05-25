@@ -16,17 +16,50 @@ For each monitored group, a directory tree like:
 
 ```
 backup/
-  familia-doe/
+  index.json                              # JID-keyed snapshot for incremental tools
+  120363012345678901@g.us/                # group JID is the stable directory name
     2025-01/
-      messages.jsonl        # one JSON object per line
+      messages.jsonl                      # one JSON object per line
       media/
         a3f8b2c1d4e5f6a7.jpg
         b1c2d3e4f5a6b7c8.mp4
 ```
 
+The directory name is the WhatsApp group JID rather than the group name,
+so renames on the phone never split a group's history. The human name
+lives in each JSONL line (`group_name`) and in `index.json` (`label`).
+
 Each line in `messages.jsonl` contains the message ID, timestamp, sender,
 type, text, and (for media) the relative path and hash. Optional fields are
 omitted when empty. See [`spec.md`](spec.md) for the full schema.
+
+### Incremental processing via `index.json`
+
+`backup/index.json` is rewritten every 30 s (and on shutdown) with the
+latest ingestion progress per group:
+
+```json
+{
+  "schema": 1,
+  "updated_at": "2026-05-25T13:00:00Z",
+  "groups": {
+    "120363428945290436@g.us": {
+      "label": "Erik <> Aylan",
+      "slug": "erik--aylan",
+      "first_message_ts": "2026-03-12T08:00:00Z",
+      "last_message_ts": "2026-05-25T11:27:36Z",
+      "last_message_id": "3EB05A9FEBC9878F64FEA4",
+      "message_count": 93,
+      "latest_month": "2026-05"
+    }
+  }
+}
+```
+
+Downstream summarizers / agents can read this single file and decide
+which groups have new activity since their last run without parsing
+every `messages.jsonl`. Writes are atomic (`tmp` + `rename`), so the
+file is never observed in a partial state.
 
 Supported message types: text, image, video, audio/voice note, document,
 sticker, poll, reaction, location. Anything else is stored with

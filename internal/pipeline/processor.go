@@ -101,7 +101,10 @@ func (p *Processor) Process(ctx context.Context, info types.MessageInfo, msg *wa
 	}
 
 	groupName := p.resolveGroupName(ctx, info.Chat)
-	slug := SanitizeGroupName(groupName)
+	// The group JID is the stable directory key. Renames update the
+	// human-readable groupName but never the JID, so the on-disk
+	// history of a group always lives under the same folder.
+	groupKey := chatJID
 	yearMonth := info.Timestamp.UTC().Format("2006-01")
 
 	env := &Message{
@@ -119,35 +122,35 @@ func (p *Processor) Process(ctx context.Context, info types.MessageInfo, msg *wa
 
 	switch {
 	case msg.GetImageMessage() != nil:
-		p.enqueueMedia(ctx, env, slug, yearMonth, "image", msg.GetImageMessage())
+		p.enqueueMedia(ctx, env, groupKey, yearMonth, "image", msg.GetImageMessage())
 	case msg.GetVideoMessage() != nil:
-		p.enqueueMedia(ctx, env, slug, yearMonth, "video", msg.GetVideoMessage())
+		p.enqueueMedia(ctx, env, groupKey, yearMonth, "video", msg.GetVideoMessage())
 	case msg.GetAudioMessage() != nil:
-		p.enqueueMedia(ctx, env, slug, yearMonth, "audio", msg.GetAudioMessage())
+		p.enqueueMedia(ctx, env, groupKey, yearMonth, "audio", msg.GetAudioMessage())
 	case msg.GetDocumentMessage() != nil:
-		p.enqueueMedia(ctx, env, slug, yearMonth, "document", msg.GetDocumentMessage())
+		p.enqueueMedia(ctx, env, groupKey, yearMonth, "document", msg.GetDocumentMessage())
 	case msg.GetStickerMessage() != nil:
-		p.enqueueMedia(ctx, env, slug, yearMonth, "sticker", msg.GetStickerMessage())
+		p.enqueueMedia(ctx, env, groupKey, yearMonth, "sticker", msg.GetStickerMessage())
 	case msg.GetPollCreationMessage() != nil || msg.GetPollCreationMessageV2() != nil || msg.GetPollCreationMessageV3() != nil:
-		p.handlePoll(env, slug, msg)
+		p.handlePoll(env, groupKey, msg)
 	case msg.GetReactionMessage() != nil:
-		p.handleReaction(env, slug, msg.GetReactionMessage())
+		p.handleReaction(env, groupKey, msg.GetReactionMessage())
 	case msg.GetLocationMessage() != nil:
-		p.handleLocation(env, slug, msg.GetLocationMessage())
+		p.handleLocation(env, groupKey, msg.GetLocationMessage())
 	case msg.GetExtendedTextMessage() != nil:
 		env.Type = "text"
 		env.Text = msg.GetExtendedTextMessage().GetText()
-		p.appendOrLog(slug, env)
+		p.appendOrLog(groupKey, env)
 	case msg.GetConversation() != "":
 		env.Type = "text"
 		env.Text = msg.GetConversation()
-		p.appendOrLog(slug, env)
+		p.appendOrLog(groupKey, env)
 	default:
-		p.handleUnknown(env, slug, msg)
+		p.handleUnknown(env, groupKey, msg)
 	}
 }
 
-func (p *Processor) handlePoll(env *Message, slug string, msg *waE2E.Message) {
+func (p *Processor) handlePoll(env *Message, groupKey string, msg *waE2E.Message) {
 	poll := msg.GetPollCreationMessage()
 	if poll == nil {
 		poll = msg.GetPollCreationMessageV2()
@@ -156,7 +159,7 @@ func (p *Processor) handlePoll(env *Message, slug string, msg *waE2E.Message) {
 		poll = msg.GetPollCreationMessageV3()
 	}
 	if poll == nil {
-		p.handleUnknown(env, slug, msg)
+		p.handleUnknown(env, groupKey, msg)
 		return
 	}
 	opts := make([]string, 0, len(poll.GetOptions()))
@@ -165,29 +168,29 @@ func (p *Processor) handlePoll(env *Message, slug string, msg *waE2E.Message) {
 	}
 	env.Type = "poll"
 	env.Poll = &PollData{Question: poll.GetName(), Options: opts}
-	p.appendOrLog(slug, env)
+	p.appendOrLog(groupKey, env)
 }
 
-func (p *Processor) handleReaction(env *Message, slug string, r *waE2E.ReactionMessage) {
+func (p *Processor) handleReaction(env *Message, groupKey string, r *waE2E.ReactionMessage) {
 	env.Type = "reaction"
 	env.Reaction = &ReactionData{
 		Emoji:       r.GetText(),
 		TargetMsgID: r.GetKey().GetID(),
 	}
-	p.appendOrLog(slug, env)
+	p.appendOrLog(groupKey, env)
 }
 
-func (p *Processor) handleLocation(env *Message, slug string, loc *waE2E.LocationMessage) {
+func (p *Processor) handleLocation(env *Message, groupKey string, loc *waE2E.LocationMessage) {
 	env.Type = "location"
 	env.Location = &LocationData{
 		Lat:  loc.GetDegreesLatitude(),
 		Lon:  loc.GetDegreesLongitude(),
 		Name: loc.GetName(),
 	}
-	p.appendOrLog(slug, env)
+	p.appendOrLog(groupKey, env)
 }
 
-func (p *Processor) handleUnknown(env *Message, slug string, msg *waE2E.Message) {
+func (p *Processor) handleUnknown(env *Message, groupKey string, msg *waE2E.Message) {
 	env.Type = "unknown"
 	// Best-effort raw dump so nothing is lost. protojson keeps the field
 	// names as defined in the .proto, which is the most stable encoding.
@@ -197,11 +200,11 @@ func (p *Processor) handleUnknown(env *Message, slug string, msg *waE2E.Message)
 			env.Raw = asMap
 		}
 	}
-	p.appendOrLog(slug, env)
+	p.appendOrLog(groupKey, env)
 }
 
-func (p *Processor) appendOrLog(slug string, env *Message) {
-	if err := p.writer.Append(slug, env); err != nil {
+func (p *Processor) appendOrLog(groupKey string, env *Message) {
+	if err := p.writer.Append(groupKey, env); err != nil {
 		p.log.Errorw("append message failed", "error", err, "id", env.ID)
 	}
 }
@@ -215,7 +218,7 @@ type downloadable interface {
 	GetFileLength() uint64
 }
 
-func (p *Processor) enqueueMedia(ctx context.Context, env *Message, slug, yearMonth, kind string, payload downloadable) {
+func (p *Processor) enqueueMedia(ctx context.Context, env *Message, groupKey, yearMonth, kind string, payload downloadable) {
 	env.Type = kind
 	// Captions / filenames vary by media type; pull what's available.
 	switch m := payload.(type) {
@@ -232,7 +235,7 @@ func (p *Processor) enqueueMedia(ctx context.Context, env *Message, slug, yearMo
 		// Without a MediaKey we can't dedup nor decrypt; persist the
 		// envelope and move on.
 		p.log.Warnw("media without MediaKey, skipping download", "id", env.ID, "type", kind)
-		p.appendOrLog(slug, env)
+		p.appendOrLog(groupKey, env)
 		return
 	}
 	hash := HashMediaKey(mediaKey)
@@ -247,7 +250,7 @@ func (p *Processor) enqueueMedia(ctx context.Context, env *Message, slug, yearMo
 	}
 
 	p.downloader.Enqueue(ctx, &MediaJob{
-		GroupSlug:        slug,
+		GroupKey:         groupKey,
 		YearMonth:        yearMonth,
 		Hash:             hash,
 		Ext:              ext,
