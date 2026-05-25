@@ -208,7 +208,14 @@ func (c *Client) initialConnect(ctx context.Context) error {
 		case "success":
 			fmt.Fprintln(os.Stderr, "\n✓ Paired successfully. Session saved.")
 			c.log.Infow("QR scan successful, session saved")
-			return nil
+			// WhatsApp tears down the anonymous pairing websocket right
+			// after PairSuccess. Force a clean local disconnect so we
+			// know the state is settled, then reconnect as the
+			// authenticated device. Without this, our caller's
+			// WaitForConnection races with the server-initiated close.
+			c.cli.Disconnect()
+			fmt.Fprintln(os.Stderr, "Reconnecting as authenticated device…")
+			return c.reconnectWithBackoff(ctx)
 		case "timeout":
 			return errors.New("QR scan timed out before user scanned (5 minutes elapsed)")
 		case "err-client-outdated":
