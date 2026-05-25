@@ -13,6 +13,30 @@
 - **`.env`** may hold paths, group identifiers, and other tuning knobs. It is
   gitignored — keep it that way.
 
+## File permission policy
+
+The daemon enforces owner-only permissions on everything it creates:
+
+- Files (`messages.jsonl`, media, `wa-session.db` and its `-wal`/`-shm`/`-journal`
+  sidecars) are created with mode **0600**.
+- Directories (backup root, per-group, per-month, `media/`, session DB parent)
+  are created with mode **0700**.
+- `syscall.Umask(0o077)` is set as the very first line of `main()` so that
+  any file the runtime or a dependency creates also defaults to owner-only.
+- On startup the daemon walks the backup root once and tightens any older
+  file or directory that is more permissive than the target mode. It never
+  loosens permissions you may have hardened further by hand.
+
+### Caveats
+
+- **Non-POSIX filesystems** (FAT, exFAT, some network mounts) silently ignore
+  POSIX modes. If you point `LOCAL_BACKUP_PATH` at one, `chmod` is a no-op
+  and the files inherit the volume's default visibility. Prefer APFS / HFS+ /
+  ext4 / ZFS for the backup directory.
+- **Existing installs** that ran an earlier version still benefit from the
+  startup tightening pass, but only for files inside `LOCAL_BACKUP_PATH`.
+  Move legacy session DBs into a 0700 directory yourself.
+
 ## Reporting a vulnerability
 
 If you find a security issue (credential leak path, file-permission flaw,

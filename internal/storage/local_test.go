@@ -80,4 +80,21 @@ func TestLocalStorage_AppendAndDedupMedia(t *testing.T) {
 	if got != want {
 		t.Fatalf("jsonl contents mismatch:\ngot=%q\nwant=%q", got, want)
 	}
+
+	// Permission sanity: files 0600, dirs 0700. Skipped silently if the
+	// underlying filesystem doesn't honour POSIX modes (FAT, exFAT, …).
+	assertMode(t, filepath.Join(dir, "familia", "2025-01", "messages.jsonl"), 0o600)
+	assertMode(t, filepath.Join(dir, "familia", "2025-01", "media", "abc123.jpg"), 0o600)
+	assertMode(t, filepath.Join(dir, "familia"), 0o700)
+}
+
+func assertMode(t *testing.T, path string, want os.FileMode) {
+	t.Helper()
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat %s: %v", path, err)
+	}
+	if got := fi.Mode().Perm(); got != want {
+		t.Errorf("mode of %s = %o, want %o", path, got, want)
+	}
 }

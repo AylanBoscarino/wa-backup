@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
@@ -36,6 +37,11 @@ type cliFlags struct {
 }
 
 func main() {
+	// Force owner-only permissions on anything stdlib creates from here on.
+	// Must run BEFORE any goroutine that might create files — umask is
+	// process-wide and not goroutine-safe.
+	syscall.Umask(0o077)
+
 	flags := parseFlags()
 	if err := run(flags); err != nil {
 		fmt.Fprintf(os.Stderr, "fatal: %v\n", err)
@@ -97,6 +103,14 @@ func run(flags cliFlags) error {
 	store, err := storage.NewLocalStorage(cfg.BackupPath)
 	if err != nil {
 		return fmt.Errorf("init storage: %w", err)
+	}
+
+	// One-time tightening pass for files left from older runs (or moved in
+	// from another machine) that may still be world-readable.
+	if n, err := tightenTree(cfg.BackupPath); err != nil {
+		sugar.Warnw("backup tree tightening incomplete", "error", err)
+	} else if n > 0 {
+		sugar.Infow("tightened existing backup permissions", "paths_changed", n)
 	}
 
 	waClient, err := client.New(ctx, cfg.SessionDBPath, sugar)
@@ -177,6 +191,43 @@ func run(flags cliFlags) error {
 		return runErr
 	}
 	return nil
+}
+
+// tightenTree walks the backup root once and downgrades any file/dir that
+// is more permissive than 0600/0700. Returns the count of changed paths.
+// Errors on individual paths are logged via the returned error chain but
+// the walk continues so a single bad file doesn't break the daemon start.
+func tightenTree(root string) (int, error) {
+	info, err := os.Stat(root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	if !info.IsDir() {
+		return 0, fmt.Errorf("%s is not a directory", root)
+	}
+	var changed int
+	walkErr := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil // best-effort
+		}
+		want := os.FileMode(0o600)
+		if info.IsDir() {
+			want = 0o700
+		}
+		// Only act when the file is more permissive than we want — never
+		// loosen permissions a user may have tightened further by hand.
+		current := info.Mode().Perm()
+		if current&^want != 0 {
+			if err := os.Chmod(path, want); err == nil {
+				changed++
+			}
+		}
+		return nil
+	})
+	return changed, walkErr
 }
 
 func runListGroups(cfg *config.Config, log *zap.SugaredLogger, flags cliFlags) error {

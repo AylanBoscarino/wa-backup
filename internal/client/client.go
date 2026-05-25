@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -44,10 +45,26 @@ const (
 
 func New(ctx context.Context, sessionDBPath string, log *zap.SugaredLogger) (*Client, error) {
 	wlog := newWaLogAdapter(log)
+
+	// Make sure the directory that will hold wa-session.db exists with
+	// owner-only permission BEFORE the DB file is created. Even if the
+	// driver creates the file world-readable (it does — modernc/sqlite
+	// honours umask only), a 0700 parent already blocks other users.
+	if dir := filepath.Dir(sessionDBPath); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return nil, fmt.Errorf("create session dir: %w", err)
+		}
+	}
+
 	dsn := fmt.Sprintf("file:%s?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)", sessionDBPath)
 	container, err := sqlstore.New(ctx, "sqlite", dsn, wlog.Sub("DB"))
 	if err != nil {
 		return nil, fmt.Errorf("open session store: %w", err)
+	}
+	// Belt-and-suspenders: tighten the DB file itself. Ignore ENOENT
+	// because some drivers create it lazily on first write.
+	if err := chmodIfExists(sessionDBPath, 0o600); err != nil {
+		log.Warnw("could not tighten session DB permissions", "path", sessionDBPath, "error", err)
 	}
 	device, err := container.GetFirstDevice(ctx)
 	if err != nil {
@@ -67,7 +84,21 @@ func New(ctx context.Context, sessionDBPath string, log *zap.SugaredLogger) (*Cl
 		banCh:        make(chan time.Duration, 1),
 	}
 	cli.AddEventHandler(c.dispatch)
+
+	// Tighten one more time now that GetFirstDevice has definitely touched
+	// the DB. Walk the sqlite sidecar files too (-wal/-shm) — they hold
+	// the same crypto material.
+	tightenSessionFiles(sessionDBPath, log)
+
 	return c, nil
+}
+
+func tightenSessionFiles(dbPath string, log *zap.SugaredLogger) {
+	for _, suffix := range []string{"", "-wal", "-shm", "-journal"} {
+		if err := chmodIfExists(dbPath+suffix, 0o600); err != nil {
+			log.Warnw("chmod session file failed", "path", dbPath+suffix, "error", err)
+		}
+	}
 }
 
 // Underlying returns the raw whatsmeow.Client. The pipeline uses it for
@@ -205,6 +236,15 @@ func (c *Client) reconnectWithBackoff(ctx context.Context) error {
 // closing it would invalidate the cached session for the next run.
 func (c *Client) Shutdown() {
 	c.cli.Disconnect()
+}
+
+// chmodIfExists tightens mode on the given path. Missing files (e.g. the
+// session DB before first write) are treated as success.
+func chmodIfExists(path string, mode os.FileMode) error {
+	if err := os.Chmod(path, mode); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }
 
 func sleepCtx(ctx context.Context, d time.Duration) bool {

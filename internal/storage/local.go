@@ -17,7 +17,7 @@ type LocalStorage struct {
 }
 
 func NewLocalStorage(root string) (*LocalStorage, error) {
-	if err := os.MkdirAll(root, 0o755); err != nil {
+	if err := os.MkdirAll(root, 0o700); err != nil {
 		return nil, fmt.Errorf("create backup root: %w", err)
 	}
 	ls := &LocalStorage{
@@ -71,11 +71,11 @@ func (l *LocalStorage) AppendMessage(groupSlug, yearMonth string, line []byte) e
 	f, ok := l.files[key]
 	if !ok {
 		dir := filepath.Join(l.root, groupSlug, yearMonth)
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return fmt.Errorf("create %s: %w", dir, err)
 		}
 		var err error
-		f, err = os.OpenFile(filepath.Join(dir, "messages.jsonl"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		f, err = os.OpenFile(filepath.Join(dir, "messages.jsonl"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 		if err != nil {
 			return fmt.Errorf("open jsonl: %w", err)
 		}
@@ -118,12 +118,12 @@ func (l *LocalStorage) WriteMedia(groupSlug, yearMonth, hash, ext string, data [
 	l.media[hash] = rel
 	l.mediaMu.Unlock()
 
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		l.forgetMedia(hash)
 		return "", fmt.Errorf("create media dir: %w", err)
 	}
 	abs := filepath.Join(dir, name)
-	if err := os.WriteFile(abs, data, 0o644); err != nil {
+	if err := os.WriteFile(abs, data, 0o600); err != nil {
 		l.forgetMedia(hash)
 		return "", fmt.Errorf("write media %s: %w", abs, err)
 	}
