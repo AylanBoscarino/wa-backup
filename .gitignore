@@ -1,0 +1,8 @@
+backup/
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+.env
+/wa-backup
+/dist
