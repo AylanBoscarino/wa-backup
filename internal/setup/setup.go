@@ -323,11 +323,13 @@ func printNextSteps(s state) {
 		fmt.Println("  •", j)
 	}
 	fmt.Println()
-	fmt.Println("Start the daemon:")
-	fmt.Println("  wa-backup")
+	fmt.Println("Start the daemon (from the project root):")
+	fmt.Println("  go run ./cmd                     # foreground, dev mode")
+	fmt.Println("  go build -o wa-backup ./cmd      # build a static binary")
+	fmt.Println("  ./wa-backup                      # run the binary")
 	fmt.Println()
 	fmt.Println("Inspect groups any time:")
-	fmt.Println("  wa-backup --list-groups")
+	fmt.Println("  go run ./cmd --list-groups")
 	fmt.Println()
 }
 

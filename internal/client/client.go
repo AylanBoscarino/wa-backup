@@ -342,13 +342,20 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 }
 
 // waLogAdapter bridges whatsmeow's waLog.Logger to zap.
+//
+// We add one level of caller skip so zap reports the whatsmeow file
+// that emitted the log (e.g. message.go:383) rather than always
+// pointing at this adapter's Warnf / Debugf / etc., which is what
+// happens by default and made every whatsmeow log line look like it
+// came from internal/client/client.go.
 type waLogAdapter struct {
 	log    *zap.SugaredLogger
 	module string
 }
 
 func newWaLogAdapter(log *zap.SugaredLogger) waLog.Logger {
-	return &waLogAdapter{log: log, module: "whatsmeow"}
+	skipped := log.Desugar().WithOptions(zap.AddCallerSkip(1)).Sugar()
+	return &waLogAdapter{log: skipped, module: "whatsmeow"}
 }
 
 func (a *waLogAdapter) Errorf(msg string, args ...interface{}) {

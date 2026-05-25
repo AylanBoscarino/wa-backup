@@ -317,16 +317,19 @@ func newLogger(level string) (*zap.Logger, error) {
 		lvl = zapcore.InfoLevel
 	}
 
-	// Console (colored) when stderr is a TTY in dev; JSON otherwise.
+	// Console (colored) when stderr is a TTY in dev; JSON otherwise. We
+	// suppress stack traces below DPanic because the daemon prints a lot
+	// of routine WARNs (decrypt failures on old offline messages, etc.)
+	// and a multi-line stack on each one drowns the actual log.
 	if isTerminal(os.Stderr) {
 		cfg := zap.NewDevelopmentConfig()
 		cfg.Level = zap.NewAtomicLevelAt(lvl)
 		cfg.EncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
-		return cfg.Build()
+		return cfg.Build(zap.AddStacktrace(zapcore.DPanicLevel))
 	}
 	cfg := zap.NewProductionConfig()
 	cfg.Level = zap.NewAtomicLevelAt(lvl)
-	return cfg.Build()
+	return cfg.Build(zap.AddStacktrace(zapcore.DPanicLevel))
 }
 
 func isTerminal(f *os.File) bool {
