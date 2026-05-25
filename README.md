@@ -72,11 +72,21 @@ the project root — actual environment variables override the file.
 
 ### Finding group JIDs
 
-Group JIDs look like `123456789-1234567890@g.us`. The simplest way to
-discover yours today is to run the daemon once with both lists empty (it
-will save every group), then read the `group_jid` field in the resulting
-JSONL files or set `LOG_LEVEL=debug` to see them in the logs. A
-`--list-groups` subcommand is planned.
+Group JIDs look like `123456789-1234567890@g.us`. Once you've paired the
+daemon once (so `wa-session.db` exists), use the built-in subcommand:
+
+```bash
+go run ./cmd --list-groups                      # top 10 by most-recent message
+go run ./cmd --list-groups --all                # everything
+go run ./cmd --list-groups --search familia     # case-insensitive name filter
+go run ./cmd --list-groups --sort members       # alternative sorts: recent|name|members|created
+go run ./cmd --list-groups --json | jq .        # machine-readable
+go run ./cmd --list-groups --no-header | cut -f1   # JIDs only (header is also auto-stripped when piping)
+```
+
+"Most recent" is derived from the existing backup (last line of the latest
+monthly JSONL per group). Groups you haven't backed up yet fall to the
+bottom, ordered by group creation date.
 
 ## Architecture
 

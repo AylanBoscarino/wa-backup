@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"os"
 	"os/signal"
@@ -13,6 +14,7 @@ import (
 	"github.com/AylanBoscarino/wa-backup/config"
 	"github.com/AylanBoscarino/wa-backup/internal/client"
 	"github.com/AylanBoscarino/wa-backup/internal/handler"
+	"github.com/AylanBoscarino/wa-backup/internal/listgroups"
 	"github.com/AylanBoscarino/wa-backup/internal/pipeline"
 	"github.com/AylanBoscarino/wa-backup/internal/storage"
 	"go.mau.fi/whatsmeow/types/events"
@@ -22,14 +24,46 @@ import (
 
 const shutdownTimeout = 30 * time.Second
 
+type cliFlags struct {
+	listGroups bool
+	limit      int
+	all        bool
+	jsonOut    bool
+	search     string
+	sortBy     string
+	reverse    bool
+	noHeader   bool
+}
+
 func main() {
-	if err := run(); err != nil {
+	flags := parseFlags()
+	if err := run(flags); err != nil {
 		fmt.Fprintf(os.Stderr, "fatal: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func run() error {
+func parseFlags() cliFlags {
+	var f cliFlags
+	flag.BoolVar(&f.listGroups, "list-groups", false, "list joined WhatsApp groups and exit")
+	flag.IntVar(&f.limit, "limit", 10, "max groups to print (ignored when --all is set)")
+	flag.BoolVar(&f.all, "all", false, "do not limit the number of groups")
+	flag.BoolVar(&f.jsonOut, "json", false, "emit a JSON array instead of a table")
+	flag.StringVar(&f.search, "search", "", "case-insensitive substring filter on group name")
+	flag.StringVar(&f.sortBy, "sort", "recent", "sort field: recent|name|members|created")
+	flag.BoolVar(&f.reverse, "reverse", false, "reverse the sort order")
+	flag.BoolVar(&f.noHeader, "no-header", false, "omit the table header (auto when stdout is not a TTY)")
+	flag.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: %s [flags]\n\n", os.Args[0])
+		fmt.Fprintln(os.Stderr, "Runs the daemon by default. Use --list-groups to print joined groups instead.")
+		fmt.Fprintln(os.Stderr)
+		flag.PrintDefaults()
+	}
+	flag.Parse()
+	return f
+}
+
+func run(flags cliFlags) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
@@ -41,6 +75,10 @@ func run() error {
 	}
 	defer log.Sync() //nolint:errcheck
 	sugar := log.Sugar()
+
+	if flags.listGroups {
+		return runListGroups(cfg, sugar, flags)
+	}
 
 	sugar.Infow("starting wa-backup",
 		"backup_path", cfg.BackupPath,
@@ -139,6 +177,30 @@ func run() error {
 		return runErr
 	}
 	return nil
+}
+
+func runListGroups(cfg *config.Config, log *zap.SugaredLogger, flags cliFlags) error {
+	sortKey, err := listgroups.ParseSortKey(flags.sortBy)
+	if err != nil {
+		return err
+	}
+	noHeader := flags.noHeader
+	if !isTerminal(os.Stdout) {
+		// Auto-strip the header so piped output (jq, awk, fzf) stays clean.
+		noHeader = true
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	opts := listgroups.Options{
+		Limit:    flags.limit,
+		All:      flags.all,
+		JSON:     flags.jsonOut,
+		Search:   flags.search,
+		SortBy:   sortKey,
+		Reverse:  flags.reverse,
+		NoHeader: noHeader,
+	}
+	return listgroups.Run(ctx, cfg, log, opts, os.Stdout)
 }
 
 func waitForSignal(cancel context.CancelFunc, log *zap.SugaredLogger) {
