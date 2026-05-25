@@ -253,25 +253,66 @@ func renderQR(w *os.File, code string, expiresIn time.Duration) {
 	qrterminal.GenerateHalfBlock(code, qr.L, w)
 }
 
+// reconnectWithBackoff drives the connect loop until the client is fully
+// logged in (websocket + Noise handshake + WhatsApp authentication), the
+// session is rejected, or ctx is canceled.
+//
+// Connect() only returns after the Noise handshake; it does NOT wait for
+// WhatsApp's "success" stanza that flips IsLoggedIn to true. We must
+// follow up with WaitForConnection so callers know it's safe to issue
+// requests like GetJoinedGroups.
 func (c *Client) reconnectWithBackoff(ctx context.Context) error {
+	const loginTimeout = 60 * time.Second
 	delay := backoffInitial
 	for {
-		if c.cli.IsConnected() {
+		if c.cli.IsLoggedIn() {
 			return nil
 		}
-		err := c.cli.Connect()
-		if err == nil || errors.Is(err, whatsmeow.ErrAlreadyConnected) {
-			return nil
+		// Drain any pending fatal event from a previous attempt so we
+		// don't keep retrying an unrecoverable session.
+		select {
+		case err := <-c.fatalCh:
+			return err
+		default:
 		}
-		c.log.Warnw("reconnect failed", "error", err, "next_delay", delay)
+		if !c.cli.IsConnected() {
+			if err := c.cli.Connect(); err != nil && !errors.Is(err, whatsmeow.ErrAlreadyConnected) {
+				c.log.Warnw("connect failed", "error", err, "next_delay", delay)
+				if !sleepCtx(ctx, delay) {
+					return ctx.Err()
+				}
+				delay = nextBackoff(delay)
+				continue
+			}
+		}
+		c.log.Debugw("websocket up, waiting for WhatsApp authentication")
+		if c.cli.WaitForConnection(loginTimeout) {
+			return nil // IsLoggedIn now true
+		}
+		// Either the login window elapsed or the server kicked us. Check
+		// the fatal channel before deciding to retry.
+		select {
+		case err := <-c.fatalCh:
+			return err
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		c.log.Warnw("authentication stalled, dropping and retrying", "next_delay", delay)
+		c.cli.Disconnect()
 		if !sleepCtx(ctx, delay) {
 			return ctx.Err()
 		}
-		delay *= 2
-		if delay > backoffMax {
-			delay = backoffMax
-		}
+		delay = nextBackoff(delay)
 	}
+}
+
+func nextBackoff(d time.Duration) time.Duration {
+	d *= 2
+	if d > backoffMax {
+		d = backoffMax
+	}
+	return d
 }
 
 // Shutdown disconnects gracefully. The container is left open because

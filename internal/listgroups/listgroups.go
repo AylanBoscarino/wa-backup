@@ -77,13 +77,12 @@ func Run(ctx context.Context, cfg *config.Config, log *zap.SugaredLogger, opts O
 		return fmt.Errorf("no session at %s — start the daemon at least once to pair your device", cfg.SessionDBPath)
 	}
 
-	if err := cli.Connect(); err != nil {
+	// PairIfNeeded short-circuits to reconnectWithBackoff for already-
+	// paired sessions, which waits for IsLoggedIn before returning.
+	if err := waClient.PairIfNeeded(ctx); err != nil {
 		return fmt.Errorf("connect: %w", err)
 	}
-	defer cli.Disconnect()
-	if !cli.WaitForConnection(20 * time.Second) {
-		return fmt.Errorf("connection did not complete within 20s")
-	}
+	defer waClient.Shutdown()
 
 	groups, err := cli.GetJoinedGroups(ctx)
 	if err != nil {

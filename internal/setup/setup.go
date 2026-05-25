@@ -196,6 +196,7 @@ func stepPairAndFetchGroups(ctx context.Context, s state, log *zap.SugaredLogger
 		fmt.Println("Step 2 of 4 — Pair with WhatsApp")
 		fmt.Println(strings.Repeat("─", 32))
 		fmt.Println("✓ Session already paired — skipping QR step.")
+		fmt.Print("Connecting to WhatsApp… ")
 	}
 	// When NOT already paired we let client.initialConnect own the
 	// terminal — it clears the screen and re-renders a single QR each
@@ -204,15 +205,19 @@ func stepPairAndFetchGroups(ctx context.Context, s state, log *zap.SugaredLogger
 
 	pairCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
+	// PairIfNeeded returns only after the client is fully authenticated
+	// (IsLoggedIn == true), so we can immediately use the client below
+	// without an extra WaitForConnection.
 	if err := waClient.PairIfNeeded(pairCtx); err != nil {
+		fmt.Println()
 		return nil, nil, fmt.Errorf("pair: %w", err)
 	}
 	defer waClient.Shutdown()
+	if waClient.IsPaired() {
+		fmt.Println("✓ connected.")
+	}
 
 	cli := waClient.Underlying()
-	if !cli.WaitForConnection(20 * time.Second) {
-		return nil, nil, fmt.Errorf("connection did not complete within 20s")
-	}
 
 	fmt.Println()
 	fmt.Println("Step 3 of 4 — Pick groups")
