@@ -44,8 +44,8 @@ latest ingestion progress per group:
   "updated_at": "2026-05-25T13:00:00Z",
   "groups": {
     "120363428945290436@g.us": {
-      "label": "Erik <> Aylan",
-      "slug": "erik--aylan",
+      "label": "Fulano <> Aylan",
+      "slug": "fulano--aylan",
       "first_message_ts": "2026-03-12T08:00:00Z",
       "last_message_ts": "2026-05-25T11:27:36Z",
       "last_message_id": "3EB05A9FEBC9878F64FEA4",
