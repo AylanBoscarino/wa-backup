@@ -78,6 +78,11 @@ type Processor struct {
 	groupName map[types.JID]string
 
 	processed int64
+
+	// Deltas for periodic ingestion reports
+	reportMu       sync.Mutex
+	reportMsgCount int
+	reportGroups   map[string]struct{}
 }
 
 func NewProcessor(cli *whatsmeow.Client, w *Writer, d *Downloader, f *GroupFilter, log *zap.SugaredLogger) *Processor {
@@ -135,6 +140,14 @@ func (p *Processor) Process(ctx context.Context, info types.MessageInfo, msg *wa
 	}
 
 	atomic.AddInt64(&p.processed, 1)
+	p.reportMu.Lock()
+	p.reportMsgCount++
+	if p.reportGroups == nil {
+		p.reportGroups = make(map[string]struct{})
+	}
+	p.reportGroups[chatJID] = struct{}{}
+	p.reportMu.Unlock()
+
 	p.log.Debugw("processing message", "id", info.ID, "group", groupName, "type_hint", info.Type)
 
 	switch {
@@ -329,4 +342,18 @@ func extractReplyTo(msg *waE2E.Message) string {
 		}
 	}
 	return ""
+}
+
+// FlushReport returns the count of messages processed and the number of unique
+// groups since the last call, resetting the delta counters.
+func (p *Processor) FlushReport() (int, int) {
+	p.reportMu.Lock()
+	defer p.reportMu.Unlock()
+	count := p.reportMsgCount
+	groups := len(p.reportGroups)
+
+	p.reportMsgCount = 0
+	p.reportGroups = make(map[string]struct{})
+
+	return count, groups
 }

@@ -170,6 +170,25 @@ func run(flags cliFlags) error {
 	histHandler := handler.NewHistoryHandler(processor, cfg.HistorySyncIdle, sugar.With("component", "history-handler"))
 	joinHandler := handler.NewJoinHandler(filter, sugar.With("component", "join-handler"))
 
+	var reportWG sync.WaitGroup
+	reportWG.Add(1)
+	go func() {
+		defer reportWG.Done()
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				count, groups := processor.FlushReport()
+				if count > 0 {
+					sugar.Infof("Ingested %d new messages from %d groups in the last 5 minutes", count, groups)
+				}
+			}
+		}
+	}()
+
 	waClient.SetHandler(func(evt interface{}) {
 		switch v := evt.(type) {
 		case *events.Message:
@@ -223,10 +242,11 @@ func run(flags cliFlags) error {
 		sugar.Errorw("storage close failed", "error", err)
 	}
 
-	// 5. Stop the history watcher + periodic index flusher (both watch ctx).
+	// 5. Stop the history watcher, periodic index flusher, and status reporter (all watch ctx).
 	cancel()
 	histWG.Wait()
 	idxWG.Wait()
+	reportWG.Wait()
 
 	// 5. Summary.
 	downloaded, failed, deduped := downloader.Stats()
