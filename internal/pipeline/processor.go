@@ -15,12 +15,13 @@ import (
 
 // GroupFilter decides whether a given group JID should be processed.
 type GroupFilter struct {
+	mu    sync.RWMutex
 	allow map[string]struct{}
 	deny  map[string]struct{}
 }
 
-func NewGroupFilter(allowlist, denylist []string) GroupFilter {
-	f := GroupFilter{}
+func NewGroupFilter(allowlist, denylist []string) *GroupFilter {
+	f := &GroupFilter{}
 	if len(allowlist) > 0 {
 		f.allow = make(map[string]struct{}, len(allowlist))
 		for _, j := range allowlist {
@@ -36,7 +37,9 @@ func NewGroupFilter(allowlist, denylist []string) GroupFilter {
 	return f
 }
 
-func (g GroupFilter) Allow(jid string) bool {
+func (g *GroupFilter) Allow(jid string) bool {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
 	if g.allow != nil {
 		_, ok := g.allow[jid]
 		return ok
@@ -48,13 +51,27 @@ func (g GroupFilter) Allow(jid string) bool {
 	return true
 }
 
+func (g *GroupFilter) IsAllowlistActive() bool {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.allow != nil
+}
+
+func (g *GroupFilter) AddAllowed(jid string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.allow != nil {
+		g.allow[jid] = struct{}{}
+	}
+}
+
 // Processor turns a (MessageInfo, *waE2E.Message) pair into JSONL output.
 // It is safe to call Process concurrently.
 type Processor struct {
 	cli        *whatsmeow.Client
 	writer     *Writer
 	downloader *Downloader
-	filter     GroupFilter
+	filter     *GroupFilter
 	log        *zap.SugaredLogger
 
 	mu        sync.RWMutex
@@ -63,7 +80,7 @@ type Processor struct {
 	processed int64
 }
 
-func NewProcessor(cli *whatsmeow.Client, w *Writer, d *Downloader, f GroupFilter, log *zap.SugaredLogger) *Processor {
+func NewProcessor(cli *whatsmeow.Client, w *Writer, d *Downloader, f *GroupFilter, log *zap.SugaredLogger) *Processor {
 	return &Processor{
 		cli:        cli,
 		writer:     w,

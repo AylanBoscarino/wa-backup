@@ -149,14 +149,34 @@ go run ./cmd --setup     # interactive wizard
 go run ./cmd             # start the daemon
 ```
 
-`--setup` walks you through choosing paths, pairing via QR, and picking
-which groups to monitor with a checkbox-style picker. It writes a `.env`
-in the project root which the daemon reads on startup. Re-run any time to
-adjust — previous values come back as defaults and the old `.env` is
-saved to `.env.bak.<timestamp>` before being overwritten.
+### Running in the background
 
-If you'd rather skip the wizard, copy `.env.example` to `.env` and edit
-by hand. The daemon also accepts plain environment variables.
+To run the daemon in the background so it survives terminal closures and ssh timeouts:
+
+```bash
+# 1. Build the binary
+go build -o wa-backup ./cmd
+
+# 2. Run in the background (ignoring hangup signals and logging to wa-backup.log)
+nohup ./wa-backup > wa-backup.log 2>&1 &
+```
+
+#### Stopping the background daemon
+
+To stop the daemon cleanly (triggering its graceful shutdown sequence to close database handles and flush files):
+
+```bash
+# Send SIGTERM to the process
+kill $(pgrep wa-backup)
+```
+
+If the above doesn't work, you can find the Process ID (PID) manually and kill it:
+```bash
+ps aux | grep wa-backup
+kill <PID>
+```
+
+---
 
 ## Configuration
 

@@ -95,10 +95,14 @@ func Run(ctx context.Context, cfg *config.Config, log *zap.SugaredLogger, opts O
 	rows := make([]Row, 0, len(groups))
 	for _, g := range groups {
 		jid := g.JID.String()
+		membersCount := g.ParticipantCount
+		if membersCount == 0 && len(g.Participants) > 0 {
+			membersCount = len(g.Participants)
+		}
 		rows = append(rows, Row{
 			JID:     jid,
 			Name:    g.Name,
-			Members: g.ParticipantCount,
+			Members: membersCount,
 			LastMsg: lastMsgByJID[jid],
 			Created: g.GroupCreated,
 		})

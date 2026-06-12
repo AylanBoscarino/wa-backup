@@ -168,6 +168,7 @@ func run(flags cliFlags) error {
 
 	msgHandler := handler.NewMessageHandler(processor, sugar.With("component", "msg-handler"))
 	histHandler := handler.NewHistoryHandler(processor, cfg.HistorySyncIdle, sugar.With("component", "history-handler"))
+	joinHandler := handler.NewJoinHandler(filter, sugar.With("component", "join-handler"))
 
 	waClient.SetHandler(func(evt interface{}) {
 		switch v := evt.(type) {
@@ -175,6 +176,8 @@ func run(flags cliFlags) error {
 			msgHandler.Handle(ctx, v)
 		case *events.HistorySync:
 			histHandler.Handle(ctx, v)
+		case *events.JoinedGroup:
+			joinHandler.Handle(ctx, v)
 		}
 	})
 
