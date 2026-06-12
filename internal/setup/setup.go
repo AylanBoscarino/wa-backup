@@ -240,7 +240,11 @@ func stepPairAndFetchGroups(ctx context.Context, s state, log *zap.SugaredLogger
 	labels := make([]string, len(groups))
 	for i, g := range groups {
 		jids[i] = g.JID.String()
-		labels[i] = fmt.Sprintf("%-40s %3d members", truncate(g.Name, 40), g.ParticipantCount)
+		membersCount := g.ParticipantCount
+		if membersCount == 0 && len(g.Participants) > 0 {
+			membersCount = len(g.Participants)
+		}
+		labels[i] = fmt.Sprintf("%-40s %3d members", truncate(g.Name, 40), membersCount)
 	}
 	return jids, labels, nil
 }
