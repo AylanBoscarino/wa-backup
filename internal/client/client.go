@@ -265,7 +265,7 @@ func (c *Client) reconnectWithBackoff(ctx context.Context) error {
 	const loginTimeout = 60 * time.Second
 	delay := backoffInitial
 	for {
-		if c.cli.IsLoggedIn() {
+		if c.cli.IsConnected() && c.cli.IsLoggedIn() {
 			return nil
 		}
 		// Drain any pending fatal event from a previous attempt so we
